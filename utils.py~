@@ -1,0 +1,97 @@
+import numpy as np
+import random
+import scipy
+import tensorflow as tf
+
+
+def randomize(x, y):
+    """ Randomizes the order of data samples and their corresponding labels"""
+    permutation = np.random.permutation(y.shape[0])
+    shuffled_x = x[permutation, :, :, :]
+    shuffled_y = y[permutation]
+    return shuffled_x, shuffled_y
+
+
+def reformat(x, y, img_size, num_ch, num_class):
+    """ Reformats the data to the format acceptable for 3D conv layers"""
+    dataset = x.reshape(
+        (-1, img_size, img_size, num_ch)).astype(np.float32)
+    labels = (np.arange(num_class) == y[:, None]).astype(np.float32)
+    return dataset, labels
+
+
+def get_next_batch(x, y, start, end):
+    x_batch = x[start:end]
+    y_batch = y[start:end]
+    return x_batch, y_batch
+
+
+def random_rotation_2d(batch, max_angle):
+    """ Randomly rotate an image by a random angle (-max_angle, max_angle).
+    Arguments:
+    max_angle: `float`. The maximum rotation angle.
+    Returns:
+    batch of rotated 2D images
+    """
+    size = batch.shape
+    batch = np.squeeze(batch)
+    batch_rot = np.zeros(batch.shape)
+    for i in range(batch.shape[0]):
+        if bool(random.getrandbits(1)):
+            image = np.squeeze(batch[i])
+            angle = random.uniform(-max_angle, max_angle)
+            batch_rot[i] = scipy.ndimage.interpolation.rotate(image, angle, mode='nearest', reshape=False)
+        else:
+            batch_rot[i] = batch[i]
+    return batch_rot.reshape(size)
+
+
+def accuracy_generator(labels_tensor, logits_tensor):
+    """
+     Calculates the classification accuracy for the given.
+     Note that this is for multi-task classification.
+    :param labels_tensor: Correct predictions. NxF matrix where
+     N is number of targets and F is number of features
+    :param logits_tensor: Predicted continuous values by the model.
+     It should have the same dimensions as does labels_tensor
+    :return: accuracy: tensor of size numConditions which gives the accuracy for each condition
+             avg_accuracy: average accuracy across all conditions
+    """
+
+    labels_series = tensor_to_series(labels_tensor)
+    logits_series = tensor_to_series(logits_tensor)
+    correct_pred = [tf.equal(tf.argmax(logits, 1), tf.argmax(labels, 1))
+                    for logits, labels in zip(logits_series, labels_series)]
+    accuracy = [tf.reduce_mean(tf.cast(correct_prediction, tf.float32))
+                for correct_prediction in correct_pred]
+    avg_accuracy = tf.reduce_mean(accuracy)
+    return accuracy, avg_accuracy
+
+def cross_entropy_loss(labels_tensor, logits_tensor):
+    """
+     Calculates the Huber-M loss function for the given
+     parameters. Note that this is for regression purposes; not
+     for classification.
+    :param labels_tensor: Correct predictions. NxF matrix where
+     N is number of targets and F is number of features
+    :param preds_tensor: Predicted continuous values by the model.
+     It should have the same dimensions as does labels_tensor
+    :param percentile: Percentile of residuals in descending order
+     on which LAD (Least Absolute Deviation) loss will be applied.
+    :param name: Operation name
+    :return: Huber-M Loss tensor
+    """
+
+    labels_series = tensor_to_series(labels_tensor)
+    logits_series = tensor_to_series(logits_tensor)
+    losses = [tf.nn.softmax_cross_entropy_with_logits(logits=logits, labels=labels)
+              for logits, labels in zip(logits_series, labels_series)]
+    total_loss = tf.reduce_mean(losses)
+    return total_loss
+
+def tensor_to_series(input_tensor):
+    [batch_size, _] = input_tensor.get_shape().as_list()
+    tensor_reshaped = tf.reshape(input_tensor, [batch_size, -1, 2])
+    tensor_transp = tf.transpose(tensor_reshaped, perm=[0, 2, 1])
+    input_series = tf.unstack(tensor_transp, axis=2)
+    return input_series
